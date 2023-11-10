@@ -14,6 +14,12 @@ def safe_log2(x):
 st.title("CPP Analysis Tool")
 
 results_file = st.file_uploader("Upload results file", type=["tsv"])
+channel_q_value_filter = st.number_input("Channel Q-value filter", value=0.10, min_value=0.0, max_value=1.0, step=0.01, help='Channel.Q.Value reflects the confidence that the precursor is indeed present in the respective channel')
+remove_zeros = st.checkbox("Remove zeros", value=True, help='Remove zero values from the data')
+merge_identical_ratios = st.checkbox("Merge identicle ratios", value=True, help='Merge identicle ratios')
+merge_tolerance = float(st.text_input("Merge tolerance", value='0.0001', help='Merge tolerance'))
+min_lysine_count = st.number_input("Min lysine count", value=1, min_value=0, max_value=10, step=1, help='Minimum number of lysines in a peptide')
+max_lysine_count = st.number_input("Max lysine count", value=1, min_value=0, max_value=10, step=1, help='Maximum number of lysines in a peptide')
 
 # Check if the file is uploaded
 if results_file is not None:
@@ -21,13 +27,35 @@ if results_file is not None:
 
     # Ensure the 'Stripped.Sequence' column exists to avoid KeyError
     if 'Stripped.Sequence' in df.columns:
-        df = df[df['Stripped.Sequence'].str.count('K') == 1]
+        df = df[(df['Stripped.Sequence'].str.count('K') <= max_lysine_count) & (df['Stripped.Sequence'].str.count('R') >= min_lysine_count)]
 
         # Ensure the 'Channel.L' and 'Channel.H' columns exist to avoid KeyError
         if all(x in df.columns for x in ['Channel.L', 'Channel.H']):
             df['Light/Heavy.Ratio'] = df['Channel.L'] / df['Channel.H']
             # Use the safe_log2 function for the 'Light/Heavy.Log2Ratio' column
             df['Light/Heavy.Log2Ratio'] = df['Light/Heavy.Ratio'].apply(safe_log2)
+
+            # Filter the data based on the Q-value
+            df = df[df['Channel.Q.Value'] <= channel_q_value_filter]
+
+            # Remove rows with zero values in either Channel.L or Channel.H
+            if remove_zeros:
+                df = df[(df['Channel.L'] != 0) & (df['Channel.H'] != 0)]
+
+            if merge_identical_ratios:
+                # In the dataframe df, some Stripped.Sequence's have Light/Heavy.Log2Ratio's that are nearly identical, but not exactly the same
+                # For these instances, we must keep only the first occurrence of each row
+
+                # Sort by 'Stripped.Sequence' and 'Light/Heavy.Log2Ratio' to ensure duplicates are ordered
+                df.sort_values(by=['Stripped.Sequence', 'Light/Heavy.Log2Ratio'], inplace=True)
+
+                # Use 'duplicated' to mark rows that have an identical sequence and a very close ratio as duplicates
+                df['is_duplicate'] = df.duplicated(subset=['Stripped.Sequence'], keep='first') & \
+                                     (df.groupby('Stripped.Sequence')['Light/Heavy.Log2Ratio'].diff().abs().fillna(
+                                         0) < merge_tolerance)
+
+                # Keep rows where 'is_duplicate' is False
+                df = df[~df['is_duplicate']].drop(columns='is_duplicate')
 
             st.subheader("Data")
             st.dataframe(df)
@@ -53,13 +81,13 @@ if results_file is not None:
             st.dataframe(stats_df)
 
             # Create the scatter plot with mean on the x-axis and standard deviation on the y-axis
-            fig = px.scatter(stats_df, x='Log2Ratio.Mean', y='Log2Ratio.Std', hover_name='Stripped.Sequence', hover_data=['Protein.Names', 'Log2Ratio.Count', 'Log2Ratio.SEM', 'Log2Ratio.Median', 'Log2Ratio.Min', 'Log2Ratio.Max'])
+            fig = px.scatter(stats_df, x='Log2Ratio.Mean', y='Log2Ratio.SEM', hover_name='Stripped.Sequence', hover_data=['Protein.Names', 'Log2Ratio.Count', 'Log2Ratio.SEM', 'Log2Ratio.Median', 'Log2Ratio.Min', 'Log2Ratio.Max'])
             # Enhance the plot with titles and labels
             fig.update_traces(textposition='top center')
             fig.update_layout(
-                title='Volcano Plot: Mean vs. Standard Deviation',
+                title='Volcano Plot: Mean vs. SEM',
                 xaxis_title='Mean of Log2 Ratios',
-                yaxis_title='Standard Deviation of Log2 Ratios',
+                yaxis_title='SEM of Log2 Ratios',
                 showlegend=False
             )
 
