@@ -1,77 +1,73 @@
 import math
-
 import streamlit as st
 import pandas as pd
+import numpy as np  # It's good practice to import numpy for numerical operations
+import plotly.express as px
 
-st.write("""
-This program takes two TSV files from Skyline and calculates the ratio of the light to heavy peptides.
+# Define a function to safely calculate log2 to handle division by zero or negative numbers
+def safe_log2(x):
+    if x > 0:
+        return math.log2(x)
+    else:
+        return np.nan  # Return NaN if the ratio is zero or negative
 
-Each TSV file is filtered in the following ways:
+st.title("CPP Analysis Tool")
 
-1) Peptides with more than one K are removed
-2) Peptides that don't start with an NTerm modification are removed
-3) Duplicate (peptide, charge) combinations have their Ms1.Area values averaged across all instances
+results_file = st.file_uploader("Upload results file", type=["tsv"])
 
-""")
+# Check if the file is uploaded
+if results_file is not None:
+    df = pd.read_csv(results_file, sep='\t')
 
-light_file = st.file_uploader("Upload light file", type=["tsv"])
-heavy_file = st.file_uploader("Upload heavy file", type=["tsv"])
+    # Ensure the 'Stripped.Sequence' column exists to avoid KeyError
+    if 'Stripped.Sequence' in df.columns:
+        df = df[df['Stripped.Sequence'].str.count('K') == 1]
 
-nterm_modification = st.text_input('N-term Modification', value="(UniMod:330)")
-light_modification = st.text_input('Light Modification', value="(UniMod:36)")
-heavy_modification = st.text_input('Heavy Modification', value="(UniMod:330)")
+        # Ensure the 'Channel.L' and 'Channel.H' columns exist to avoid KeyError
+        if all(x in df.columns for x in ['Channel.L', 'Channel.H']):
+            df['Light/Heavy.Ratio'] = df['Channel.L'] / df['Channel.H']
+            # Use the safe_log2 function for the 'Light/Heavy.Log2Ratio' column
+            df['Light/Heavy.Log2Ratio'] = df['Light/Heavy.Ratio'].apply(safe_log2)
 
-if not st.button('Run'):
-    st.stop()
+            st.subheader("Data")
+            st.dataframe(df)
 
-df_light = pd.read_csv(light_file, sep='\t')
-df_heavy = pd.read_csv(heavy_file, sep='\t')
+            # Group by 'Stripped.Sequence' and calculate the required statistics
+            stats_df = df.groupby(['Stripped.Sequence', 'Protein.Names'])['Light/Heavy.Log2Ratio'].agg(['mean', 'std', 'count', 'sem', 'median', 'min', 'max'])
+            stats_df.reset_index(inplace=True)
 
-# Remove peptides with more than one K
-df_light = df_light[df_light['Stripped.Sequence'].str.count('K') == 1]
-df_heavy = df_heavy[df_heavy['Stripped.Sequence'].str.count('K') == 1]
+            # Rename the columns for clarity
+            stats_df.columns = [
+                'Stripped.Sequence',
+                'Protein.Names',
+                'Log2Ratio.Mean',
+                'Log2Ratio.Std',
+                'Log2Ratio.Count',
+                'Log2Ratio.SEM',
+                'Log2Ratio.Median',
+                'Log2Ratio.Min',
+                'Log2Ratio.Max'
+            ]
 
-# remove peptides that don't start with an NTerm modification
-df_light = df_light[df_light['Modified.Sequence'].str.startswith(nterm_modification)]
-df_heavy = df_heavy[df_heavy['Modified.Sequence'].str.startswith(nterm_modification)]
+            st.subheader("Statistics")
+            st.dataframe(stats_df)
 
-# remove unused columns
-df_light = df_light[['Modified.Sequence', 'Precursor.Charge', 'Ms1.Area']]
-df_heavy = df_heavy[['Modified.Sequence', 'Precursor.Charge', 'Ms1.Area']]
+            # Create the scatter plot with mean on the x-axis and standard deviation on the y-axis
+            fig = px.scatter(stats_df, x='Log2Ratio.Mean', y='Log2Ratio.Std', hover_name='Stripped.Sequence', hover_data=['Protein.Names', 'Log2Ratio.Count', 'Log2Ratio.SEM', 'Log2Ratio.Median', 'Log2Ratio.Min', 'Log2Ratio.Max'])
+            # Enhance the plot with titles and labels
+            fig.update_traces(textposition='top center')
+            fig.update_layout(
+                title='Volcano Plot: Mean vs. Standard Deviation',
+                xaxis_title='Mean of Log2 Ratios',
+                yaxis_title='Standard Deviation of Log2 Ratios',
+                showlegend=False
+            )
 
-# merge duplicate rows
-df_light = df_light.groupby(['Modified.Sequence', 'Precursor.Charge']).mean().reset_index()
-df_heavy = df_heavy.groupby(['Modified.Sequence', 'Precursor.Charge']).mean().reset_index()
+            st.plotly_chart(fig)
 
-sequence_heavy_to_light = {}
-sequence_to_area_light = {}
-for index, row in df_light.iterrows():
-    heavy_modified_sequence = row['Modified.Sequence'].replace(light_modification, heavy_modification)
-    sequence_heavy_to_light[heavy_modified_sequence] = row['Modified.Sequence']
-    precursor_charge = row['Precursor.Charge']
-    sequence_to_area_light[(heavy_modified_sequence, precursor_charge)] = row['Ms1.Area']
-
-sequence_to_area_heavy = {}
-for index, row in df_heavy.iterrows():
-    modified_sequence = row['Modified.Sequence']
-    precursor_charge = row['Precursor.Charge']
-    sequence_to_area_heavy[(modified_sequence, precursor_charge)] = row['Ms1.Area']
-
-ratio_data = {}
-for (modified_sequence, precursor_charge), area_light in sequence_to_area_light.items():
-    light_modified_peptide = sequence_heavy_to_light[modified_sequence]
-    area_heavy = sequence_to_area_heavy.get((modified_sequence, precursor_charge), 0)
-    if area_heavy > 0:
-        ratio_data[(modified_sequence, light_modified_peptide, precursor_charge)] = area_light / area_heavy
-
-df = pd.DataFrame.from_dict(ratio_data, orient='index', columns=['Light/Heavy.Ratio'])
-
-# Fix the index
-df.index = pd.MultiIndex.from_tuples(df.index, names=['Modified.Sequence.Heavy', 'Modified.Sequence.Light', 'Precursor.Charge'])
-
-# Add log2 column
-df['Light/Heavy.Log2Ratio'] = df['Light/Heavy.Ratio'].apply(lambda x: math.log2(x))
-
-st.dataframe(df)
-
-
+        else:
+            st.error("The uploaded file does not contain 'Channel.L' or 'Channel.H' columns.")
+    else:
+        st.error("The uploaded file does not contain 'Stripped.Sequence' column.")
+else:
+    st.warning("Please upload a file to proceed.")
