@@ -1,8 +1,13 @@
 import math
+
+import requests
 import streamlit as st
 import pandas as pd
 import numpy as np  # It's good practice to import numpy for numerical operations
 import plotly.express as px
+#from fastaframes import to_df
+#from peptacular.protein import find_peptide_indexes
+
 
 # Define a function to safely calculate log2 to handle division by zero or negative numbers
 def safe_log2(x):
@@ -11,9 +16,21 @@ def safe_log2(x):
     else:
         return np.nan  # Return NaN if the ratio is zero or negative
 
+@st.cache_data
+def fetch_sequence_from_uniprot(accession_number):
+    url = f"https://www.uniprot.org/uniprot/{accession_number}.fasta"
+    response = requests.get(url)
+    if response.status_code != 200:
+        st.error(f"Error fetching sequence from UniProt: {response.status_code}")
+        st.stop()
+        return None
+    return ''.join(response.text.split('\n')[1:])  # Remove the header line
+
+
 st.title("CPP Analysis Tool")
 
-results_file = st.file_uploader("Upload results file", type=["tsv"])
+results_file = st.file_uploader("Upload results file", type=[".tsv"])
+#fasta_file = st.file_uploader("Upload fasta file", type=[".fasta"])
 channel_q_value_filter = st.number_input("Channel Q-value filter", value=0.10, min_value=0.0, max_value=1.0, step=0.01, help='Channel.Q.Value reflects the confidence that the precursor is indeed present in the respective channel')
 remove_zeros = st.checkbox("Remove zeros", value=True, help='Remove zero values from the data')
 merge_identical_ratios = st.checkbox("Merge identicle ratios", value=True, help='Merge identicle ratios')
@@ -27,7 +44,7 @@ if results_file is not None:
 
     # Ensure the 'Stripped.Sequence' column exists to avoid KeyError
     if 'Stripped.Sequence' in df.columns:
-        df = df[(df['Stripped.Sequence'].str.count('K') <= max_lysine_count) & (df['Stripped.Sequence'].str.count('R') >= min_lysine_count)]
+        df = df[(df['Stripped.Sequence'].str.count('K') <= max_lysine_count) & (df['Stripped.Sequence'].str.count('K') >= min_lysine_count)]
 
         # Ensure the 'Channel.L' and 'Channel.H' columns exist to avoid KeyError
         if all(x in df.columns for x in ['Channel.L', 'Channel.H']):
@@ -92,6 +109,8 @@ if results_file is not None:
             )
 
             st.plotly_chart(fig)
+
+
 
         else:
             st.error("The uploaded file does not contain 'Channel.L' or 'Channel.H' columns.")
