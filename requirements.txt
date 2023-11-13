@@ -2,3 +2,6 @@ streamlit~=1.28.1
 pandas~=2.1.2
 plotly~=5.18.0
 numpy~=1.26.1
+requests~=2.31.0
+fastaframes~=1.1.0
+peptacular~=1.0.1
