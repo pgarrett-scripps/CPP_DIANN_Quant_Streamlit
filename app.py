@@ -258,13 +258,15 @@ if fasta_file is not None:
         'Log2Ratio.Max'
     ]
 
+    protein_site_df['Protein.Site.Name'] = protein_site_df['Protein.Name'] + '@' + protein_site_df['Site.Index'].astype(str)
+
     protein_site_df['Accessibility'] = 100 * 2 ** protein_site_df['Log2Ratio.Mean'] / (2 ** protein_site_df['Log2Ratio.Mean'] + 1)
 
     st.dataframe(protein_site_df)
 
     # Create the scatter plot with mean on the x-axis and standard deviation on the y-axis
-    fig = px.scatter(protein_site_df, x='Log2Ratio.Mean', y='Log2Ratio.SEM', hover_name='Site.Index',
-                     hover_data=['Protein.Name', 'Log2Ratio.Count', 'Log2Ratio.SEM', 'Log2Ratio.Median',
+    fig = px.scatter(protein_site_df, x='Log2Ratio.Mean', y='Log2Ratio.SEM', hover_name='Protein.Site.Name',
+                     hover_data=['Protein.Name', 'Site.Index', 'Log2Ratio.Count', 'Log2Ratio.SEM', 'Log2Ratio.Median',
                                  'Log2Ratio.Min', 'Log2Ratio.Max'])
 
     # Enhance the plot with titles and labels
