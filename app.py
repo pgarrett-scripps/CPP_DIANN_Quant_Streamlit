@@ -172,8 +172,8 @@ if fasta_file is not None:
 
     df['Peptide.Indexes'] = peptide_indexes_list
     df['Site.Indexes'] = site_index_list
-    df['Peptide.Strings'] = peptide_strings
-    df['Protein.Strings'] = protein_strings
+    df['Peptide.Index.Strings'] = peptide_strings
+    df['Protein.Site.Strings'] = protein_strings
 
 st.subheader("Filtered Data")
 st.metric(label="Number of peptides", value=df.shape[0])
@@ -222,32 +222,32 @@ fig.update_layout(
 st.plotly_chart(fig)
 
 if fasta_file is not None:
-
-    st.subheader("Site level Statistics")
-
     # split by protein_str
-
     data = []
     for index, row in df.iterrows():
         protein_site_strs = []
-        for protein_strs in row['Protein.Strings'].split(';'):
+        unique = len(row['Protein.Site.Strings'].split(';')) == 1
+        for protein_strs in row['Protein.Site.Strings'].split(';'):
             for protein_str in protein_strs.split(','):
                 protein_site_strs.append(protein_str)
 
         for protein_site_str in protein_site_strs:
             protein_name, site_index = protein_site_str.split('@')
-            data.append([protein_name, int(site_index), row['Light/Heavy.Log2Ratio']])
+            data.append([protein_name, int(site_index), row['Light/Heavy.Log2Ratio'], int(unique)])
 
-    protein_site_df = pd.DataFrame(data, columns=['Protein.Name', 'Site.Index', 'Log2Ratio'])
+    protein_site_df = pd.DataFrame(data, columns=['Protein.Id', 'Site.Index', 'Log2Ratio', 'Unique'])
+
+    #st.subheader("Site level Data")
+    #st.dataframe(protein_site_df)
 
     # Group by 'Stripped.Sequence' and calculate the required statistics
-    protein_site_df = protein_site_df.groupby(['Protein.Name', 'Site.Index'])[
+    protein_site_df = protein_site_df.groupby(['Protein.Id', 'Site.Index'])[
         'Log2Ratio'].agg(['mean', 'std', 'count', 'sem', 'median', 'min', 'max'])
     protein_site_df.reset_index(inplace=True)
 
     # Rename the columns for clarity
     protein_site_df.columns = [
-        'Protein.Name',
+        'Protein.Id',
         'Site.Index',
         'Log2Ratio.Mean',
         'Log2Ratio.Std',
@@ -258,15 +258,16 @@ if fasta_file is not None:
         'Log2Ratio.Max'
     ]
 
-    protein_site_df['Protein.Site.Name'] = protein_site_df['Protein.Name'] + '@' + protein_site_df['Site.Index'].astype(str)
+    protein_site_df['Protein.Site.String'] = protein_site_df['Protein.Id'] + '@' + protein_site_df['Site.Index'].astype(str)
 
     protein_site_df['Accessibility'] = 100 * 2 ** protein_site_df['Log2Ratio.Mean'] / (2 ** protein_site_df['Log2Ratio.Mean'] + 1)
 
+    st.subheader("Site level Statistics")
     st.dataframe(protein_site_df)
 
     # Create the scatter plot with mean on the x-axis and standard deviation on the y-axis
-    fig = px.scatter(protein_site_df, x='Log2Ratio.Mean', y='Log2Ratio.SEM', hover_name='Protein.Site.Name',
-                     hover_data=['Protein.Name', 'Site.Index', 'Log2Ratio.Count', 'Log2Ratio.SEM', 'Log2Ratio.Median',
+    fig = px.scatter(protein_site_df, x='Log2Ratio.Mean', y='Log2Ratio.SEM', hover_name='Protein.Site.String',
+                     hover_data=['Protein.Id', 'Site.Index', 'Log2Ratio.Count', 'Log2Ratio.SEM', 'Log2Ratio.Median',
                                  'Log2Ratio.Min', 'Log2Ratio.Max'])
 
     # Enhance the plot with titles and labels
