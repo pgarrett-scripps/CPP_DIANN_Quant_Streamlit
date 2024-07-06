@@ -1,17 +1,16 @@
 import math
 
-import requests
 import streamlit as st
 import pandas as pd
-import numpy as np  # It's good practice to import numpy for numerical operations
+import numpy as np
 import plotly.express as px
 from fastaframes import to_df
 from peptacular.protein import find_peptide_indexes
+from scipy.stats import norm
 
 
 # Define a function to safely calculate log2 to handle division by zero or negative numbers
 def safe_log2(x):
-
     if x > 0:
         return math.log2(x)
     elif x == 0:
@@ -29,6 +28,7 @@ def ratio_inf(row):
     else:
         return light_value / heavy_value
 
+
 def calculate_accessibility(row):
     if row['Light/Heavy.Log2Ratio'] == float('-inf'):
         return 0
@@ -38,36 +38,71 @@ def calculate_accessibility(row):
 
     return 100 * 2 ** row['Light/Heavy.Log2Ratio'] / (2 ** row['Light/Heavy.Log2Ratio'] + 1)
 
-st.title("CPP Analysis Tool")
+with st.sidebar:
+    st.title("CPP Analysis Tool")
 
-results_file = st.file_uploader("Upload results file", type=[".tsv"])
-fasta_file = st.file_uploader("Upload fasta file", type=[".fasta"])
-channel_q_value_filter = st.number_input("Channel Q-value filter", value=0.10, min_value=0.0, max_value=1.0, step=0.01,
-                                         help='Channel.Q.Value reflects the confidence that the precursor is indeed present in the respective channel')
-remove_zeros = st.checkbox("Remove zeros", value=True, help='Remove zero values from the data')
-fill_inf_with = st.number_input("Fill inf with", value=100)
-merge_identical_ratios = st.checkbox("Merge identical ratios", value=True, help='Merge identicle ratios')
-merge_tolerance = float(st.text_input("Merge tolerance", value='0.0001', help='Merge tolerance'))
+    results_file = st.file_uploader("Upload results file", type=[".tsv", ".zip"], accept_multiple_files=True)
+    fasta_file = st.file_uploader("Upload fasta file", type=[".fasta"])
+    channel_q_value_filter = st.number_input("Channel Q-value filter", value=0.10, min_value=0.0, max_value=1.0, step=0.01,
+                                             help='Channel.Q.Value reflects the confidence that the precursor is indeed present in the respective channel')
+    remove_zeros = st.checkbox("Remove zeros", value=True, help='Remove zero values from the data')
+    fill_inf_with = st.number_input("Fill inf with", value=100)
+    merge_identical_ratios = st.checkbox("Merge identical ratios", value=True, help='Merge identicle ratios')
+    merge_tolerance = float(st.text_input("Merge tolerance", value='0.0001', help='Merge tolerance'))
 
-c1, c2 = st.columns(2)
-min_lysine_count = c1.number_input("Min lysine count", value=1, min_value=0, max_value=10, step=1,
-                                   help='Minimum number of lysines in a peptide')
-max_lysine_count = c2.number_input("Max lysine count", value=1, min_value=0, max_value=10, step=1,
-                                   help='Maximum number of lysines in a peptide')
+    c1, c2 = st.columns(2)
+    min_lysine_count = c1.number_input("Min lysine count", value=1, min_value=0, max_value=10, step=1,
+                                       help='Minimum number of lysines in a peptide')
+    max_lysine_count = c2.number_input("Max lysine count", value=1, min_value=0, max_value=10, step=1,
+                                       help='Maximum number of lysines in a peptide')
 
-min_ms1_area = st.number_input("Min MS1 area", value=10_000, min_value=0, help='Minimum MS1 area')
+    min_ms1_area = st.number_input("Min MS1 area", value=10_000, min_value=0, help='Minimum MS1 area')
 
-c1, c2 = st.columns(2)
-min_evidence_ms1 = c2.number_input("Min evidence MS1", value=0.0, min_value=0.0, max_value=1.0, help='Minimum evidence MS1')
-min_evidence_ms2 = c1.number_input("Min evidence MS2", value=0.0, min_value=0.0, help='Minimum evidence MS2')
+    c1, c2 = st.columns(2)
+    min_evidence_ms1 = c2.number_input("Min evidence MS1", value=0.0, min_value=0.0, max_value=1.0,
+                                       help='Minimum evidence MS1')
+    min_evidence_ms2 = c1.number_input("Min evidence MS2", value=0.0, min_value=0.0, help='Minimum evidence MS2')
+
+
+    # peptide filter:
+    should_filter_peptides = st.checkbox("Filter peptides", value=False)
+
+    filter_peptides = set()
+    if should_filter_peptides:
+        filter_peptides = st.text_input("Stripped peptides to keep (Comma seperated)", value="")
+        filter_peptides = set(filter_peptides.split(','))
+
+    should_filter_sites = st.checkbox("Filter sites", value=False)
+
+    filter_sites = set()
+    if should_filter_sites:
+        filter_sites = st.text_input("Sites to keep (Comma seperated)", value="")
+        filter_sites = set(filter_sites.split(','))
+
+    run_btn = st.button('Run', use_container_width=True, type='primary')
+
+if not run_btn:
+    st.warning('Click the "Run" button to start the analysis.')
+    st.stop()
 
 # Check if the file is uploaded
-if results_file is None:
+if results_file is None or len(results_file) == 0:
     st.warning("Please upload a file to proceed.")
     st.stop()
 
+
+
+
 # load file
-df = pd.read_csv(results_file, sep='\t')
+dfs = []
+for results_file in results_file:
+    if results_file.name.endswith('.zip'):
+        df = pd.read_csv(results_file, sep='\t', compression='zip')
+    else:
+        df = pd.read_csv(results_file, sep='\t')
+    dfs.append(df)
+
+df = pd.concat(dfs)
 
 # Filter based on the number of lysine's in the peptide
 df = df[(df['Stripped.Sequence'].str.count('K') <= max_lysine_count) &
@@ -103,7 +138,6 @@ df['Accessibility'] = df.apply(calculate_accessibility, axis=1)
 df['Light/Heavy.Log2Ratio'] = df['Light/Heavy.Log2Ratio'].replace([np.inf], fill_inf_with)
 df['Light/Heavy.Log2Ratio'] = df['Light/Heavy.Log2Ratio'].replace([-np.inf], -fill_inf_with)
 
-
 if merge_identical_ratios:
     # In the dataframe df, some Stripped.Sequence's have Light/Heavy.Log2Ratio's that are nearly identical, but not exactly the same
     # For these instances, we must keep only the first occurrence of each row
@@ -119,6 +153,8 @@ if merge_identical_ratios:
     # Keep rows where 'is_duplicate' is False and Light/Heavy.Ratio is not 0 or inf
     df = df[(~df['is_duplicate'])].drop(columns='is_duplicate')
 
+if len(filter_peptides) > 0:
+    df = df[df['Stripped.Sequence'].isin(filter_peptides)]
 
 if fasta_file is not None:
 
@@ -163,7 +199,8 @@ if fasta_file is not None:
         site_index_str = ';'.join([','.join(map(str, x)) for x in sites_by_protein])
 
         peptide_strs = [[stripped_sequence + '@' + str(index) for index in indexes] for indexes in indexes_by_protein]
-        protein_strs = [[protein_name + '@' + str(index) for index in indexes] for protein_name, indexes in zip(protein_names, sites_by_protein)]
+        protein_strs = [[protein_name + '@' + str(index) for index in indexes] for protein_name, indexes in
+                        zip(protein_names, sites_by_protein)]
 
         peptide_indexes_list.append(peptide_index_str)
         site_index_list.append(site_index_str)
@@ -175,12 +212,16 @@ if fasta_file is not None:
     df['Peptide.Index.Strings'] = peptide_strings
     df['Protein.Site.Strings'] = protein_strings
 
+if should_filter_sites:
+    df = df[df['Protein.Site.Strings'].isin(filter_sites)]
+
 st.subheader("Filtered Data")
 st.metric(label="Number of peptides", value=df.shape[0])
 st.dataframe(df)
 
 # Group by 'Stripped.Sequence' and calculate the required statistics
-stats_df = df.groupby(['Stripped.Sequence', 'Protein.Ids', 'Protein.Group', 'Protein.Names', 'Genes'])['Light/Heavy.Log2Ratio'].agg(
+stats_df = df.groupby(['Stripped.Sequence', 'Protein.Ids', 'Protein.Group', 'Protein.Names', 'Genes'])[
+    'Light/Heavy.Log2Ratio'].agg(
     ['mean', 'std', 'count', 'sem', 'median', 'min', 'max'])
 stats_df.reset_index(inplace=True)
 
@@ -237,8 +278,8 @@ if fasta_file is not None:
 
     protein_site_df = pd.DataFrame(data, columns=['Protein.Id', 'Site.Index', 'Log2Ratio', 'Unique'])
 
-    #st.subheader("Site level Data")
-    #st.dataframe(protein_site_df)
+    # st.subheader("Site level Data")
+    # st.dataframe(protein_site_df)
 
     # Group by 'Stripped.Sequence' and calculate the required statistics
     protein_site_df = protein_site_df.groupby(['Protein.Id', 'Site.Index'])[
@@ -258,9 +299,11 @@ if fasta_file is not None:
         'Log2Ratio.Max'
     ]
 
-    protein_site_df['Protein.Site.String'] = protein_site_df['Protein.Id'] + '@' + protein_site_df['Site.Index'].astype(str)
+    protein_site_df['Protein.Site.String'] = protein_site_df['Protein.Id'] + '@' + protein_site_df['Site.Index'].astype(
+        str)
 
-    protein_site_df['Accessibility'] = 100 * 2 ** protein_site_df['Log2Ratio.Mean'] / (2 ** protein_site_df['Log2Ratio.Mean'] + 1)
+    protein_site_df['Accessibility'] = 100 * 2 ** protein_site_df['Log2Ratio.Mean'] / (
+                2 ** protein_site_df['Log2Ratio.Mean'] + 1)
 
     st.subheader("Site level Statistics")
     st.dataframe(protein_site_df)
@@ -280,3 +323,12 @@ if fasta_file is not None:
     )
 
     st.plotly_chart(fig)
+
+
+    df_quant = pd.DataFrame()
+    df_quant['MS2.Scan'] = df['MS2.Scan']
+    df_quant['Modified.Sequence'] = df['Modified.Sequence']
+    df_quant['Light/Heavy.Ratio'] = df['Light/Heavy.Ratio']
+    df_quant['Channel.Zscore.Value'] = abs(norm.ppf(df['Channel.Q.Value']))
+    st.dataframe(df_quant)
+
