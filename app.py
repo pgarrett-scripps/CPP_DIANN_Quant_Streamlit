@@ -175,6 +175,10 @@ if fasta_file is not None:
         sites_by_protein = []
         for protein_name in protein_names:
             # find index of sequence in protein sequence
+            if protein_name not in protein_name_to_sequence:
+                st.warning(f"Protein {protein_name} not found in fasta file")
+                continue
+
             protein_sequence = protein_name_to_sequence[protein_name]
             if stripped_sequence not in protein_sequence:
                 st.warning(f"Sequence {stripped_sequence} not found in protein {protein_name}")
