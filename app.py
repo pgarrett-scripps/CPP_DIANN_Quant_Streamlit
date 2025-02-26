@@ -20,8 +20,8 @@ def safe_log2(x):
 
 
 def ratio_inf(row):
-    light_value = row['Channel.L']
-    heavy_value = row['Channel.H']
+    light_value = row['Ms1.Area.L']
+    heavy_value = row['Ms1.Area.H']
 
     if heavy_value == 0:
         return float('inf')
@@ -38,13 +38,16 @@ def calculate_accessibility(row):
 
     return 100 * 2 ** row['Light/Heavy.Log2Ratio'] / (2 ** row['Light/Heavy.Log2Ratio'] + 1)
 
+
 with st.sidebar:
     st.title("CPP Analysis Tool")
 
-    results_file = st.file_uploader("Upload results file", type=[".tsv", ".zip"], accept_multiple_files=True)
+    results_file = st.file_uploader("Upload results file", type=[".tsv", ".zip", ".parquet"], accept_multiple_files=True)
     fasta_file = st.file_uploader("Upload fasta file", type=[".fasta"])
-    channel_q_value_filter = st.number_input("Channel Q-value filter", value=0.10, min_value=0.0, max_value=1.0, step=0.01,
-                                             help='Channel.Q.Value reflects the confidence that the precursor is indeed present in the respective channel')
+    channel_q_value_filter = st.number_input("Channel Q-value filter", value=0.10, min_value=0.0, max_value=1.0,
+                                             step=0.01,
+                                             help='Channel.Q.Value reflects the confidence that the precursor is indeed'
+                                                  ' present in the respective channel')
     remove_zeros = st.checkbox("Remove zeros", value=True, help='Remove zero values from the data')
     fill_inf_with = st.number_input("Fill inf with", value=100)
     merge_identical_ratios = st.checkbox("Merge identical ratios", value=True, help='Merge identicle ratios')
@@ -63,7 +66,6 @@ with st.sidebar:
                                        help='Minimum evidence MS1')
     min_evidence_ms2 = c1.number_input("Min evidence MS2", value=0.0, min_value=0.0, help='Minimum evidence MS2')
 
-
     # peptide filter:
     should_filter_peptides = st.checkbox("Filter peptides", value=False)
 
@@ -79,6 +81,10 @@ with st.sidebar:
         filter_sites = st.text_input("Sites to keep (Comma seperated)", value="")
         filter_sites = set(filter_sites.split(','))
 
+    c1, c2 = st.columns(2)
+    light_channel_label = c1.text_input("Light channel label", value="L")
+    heavy_channel_label = c2.text_input("Heavy channel label", value="H")
+
     run_btn = st.button('Run', use_container_width=True, type='primary')
 
 if not run_btn:
@@ -90,71 +96,100 @@ if results_file is None or len(results_file) == 0:
     st.warning("Please upload a file to proceed.")
     st.stop()
 
-
-
-
 # load file
 dfs = []
 for results_file in results_file:
     if results_file.name.endswith('.zip'):
         df = pd.read_csv(results_file, sep='\t', compression='zip')
     else:
-        df = pd.read_csv(results_file, sep='\t')
+        try:
+            df = pd.read_csv(results_file, sep='\t')
+        except:
+            df = pd.read_parquet(results_file)
+
     dfs.append(df)
 
 df = pd.concat(dfs)
 
-# Filter based on the number of lysine's in the peptide
-df = df[(df['Stripped.Sequence'].str.count('K') <= max_lysine_count) &
-        (df['Stripped.Sequence'].str.count('K') >= min_lysine_count)]
+# drop rows that dont have a Channel value in [light_channel_label, heavy_channel_label]
+df = df[df['Channel'].isin([light_channel_label, heavy_channel_label])]
 
-# remove rows with both channels missing
-df = df[(df['Channel.L'] != 0) | (df['Channel.H'] != 0)]
+# NEW: Pivot data if using new long-format with a 'channel' column
+index_cols = ['Run', 'Precursor.Id', 'Modified.Sequence', 'Stripped.Sequence', 'Precursor.Charge',
+              'Precursor.Lib.Index', 'Decoy', 'Proteotypic', 'Protein.Ids', 'Protein.Group',
+              'Protein.Names', 'Genes']
 
-# Remove rows with zero values in either Channel.L or Channel.H
+ratio_df = df.pivot_table(
+    index=index_cols,
+    columns=['Channel'],
+    values=['Ms1.Area', 'Evidence', 'Mass.Evidence', 'Channel.Evidence', 'Q.Value', 'Global.Q.Value', 'Channel.Q.Value'],
+    aggfunc=lambda x: x if len(x) == 1 else (_ for _ in ()).throw(ValueError(f"Duplicate entries found for {x.index}"))
+).reset_index()
+
+# Collapse multi-index column names, but keep index columns unchanged
+ratio_df.columns = [
+    col[0] if col[1] == '' else f"{col[0]}.{col[1]}"
+    for col in ratio_df.columns.to_flat_index()
+]
+
+# Remove rows with both channels missing
+ratio_df.dropna(subset=['Ms1.Area.L', 'Ms1.Area.H'], how='all', inplace=True)
+
+# filter based on the number of lysine's in the peptide
+ratio_df['K_count'] = ratio_df['Stripped.Sequence'].str.count('K')
+ratio_df = ratio_df[(ratio_df['K_count'] > max_lysine_count) | (ratio_df['K_count'] < min_lysine_count)]
+
+
+if len(filter_peptides) > 0:
+    ratio_df = ratio_df[ratio_df['Stripped.Sequence'].isin(filter_peptides)]
+
+# Remove rows with zero values in either Channel.L or Channel.H if required
 if remove_zeros:
-    df = df[(df['Channel.L'] != 0) & (df['Channel.H'] != 0)]
+    ratio_df.dropna(subset=['Ms1.Area.L', 'Ms1.Area.H'], inplace=True)
 
-# Remove rows which don't have a Channel.L or Channel.H value above the min_ms1_area
-df = df[(df['Channel.L'] >= min_ms1_area) | (df['Channel.H'] >= min_ms1_area)]
+
+# Ensure NaN values are replaced with 0 before filtering
+ratio_df = ratio_df[(ratio_df['Ms1.Area.L'].fillna(0) >= min_ms1_area) |
+                     (ratio_df['Ms1.Area.H'].fillna(0) >= min_ms1_area)]
+
+
+# Calculate the light/heavy ratio
+ratio_df['Light/Heavy.Ratio'] = ratio_df.apply(ratio_inf, axis=1)  # Light/Heavy.Ratio in range of [0 - inf]
+
+# Use the safe_log2 function for the 'Light/Heavy.Log2Ratio' column
+ratio_df['Light/Heavy.Log2Ratio'] = ratio_df['Light/Heavy.Ratio'].apply(safe_log2)  # Light/Heavy.Log2Ratio in range of [-inf - inf]
+
+# Calculate Accessibility from Log2Ratio, but override with 0 or 100 if
+ratio_df['Accessibility'] = ratio_df.apply(calculate_accessibility, axis=1)
+
+# replace inf values with fill_inf_with
+ratio_df['Light/Heavy.Log2Ratio'] = ratio_df['Light/Heavy.Log2Ratio'].replace([np.inf], fill_inf_with)
+ratio_df['Light/Heavy.Log2Ratio'] = ratio_df['Light/Heavy.Log2Ratio'].replace([-np.inf], -fill_inf_with)
+
+
+st.dataframe(ratio_df)
+
+st.dataframe(df)
+
 
 # Apply channel.evidence filter
-df = df[(df['Channel.Evidence.Ms1'] >= min_evidence_ms1)]
-df = df[(df['Channel.Evidence.Ms2'] >= min_evidence_ms2)]
+df = df[(df['Channel.Evidence'] >= min_evidence_ms1)]
 
 # Filter the data based on the Q-value
 df = df[df['Channel.Q.Value'] <= channel_q_value_filter]
 
-# Calculate the light/heavy ratio
-df['Light/Heavy.Ratio'] = df.apply(ratio_inf, axis=1)  # Light/Heavy.Ratio in range of [0 - inf]
 
-# Use the safe_log2 function for the 'Light/Heavy.Log2Ratio' column
-df['Light/Heavy.Log2Ratio'] = df['Light/Heavy.Ratio'].apply(safe_log2)  # Light/Heavy.Log2Ratio in range of [-inf - inf]
 
-# Calculate Accessibility from Log2Ratio, but override with 0 or 100 if
-df['Accessibility'] = df.apply(calculate_accessibility, axis=1)
 
-# replace inf values with fill_inf_with
-df['Light/Heavy.Log2Ratio'] = df['Light/Heavy.Log2Ratio'].replace([np.inf], fill_inf_with)
-df['Light/Heavy.Log2Ratio'] = df['Light/Heavy.Log2Ratio'].replace([-np.inf], -fill_inf_with)
 
-if merge_identical_ratios:
-    # In the dataframe df, some Stripped.Sequence's have Light/Heavy.Log2Ratio's that are nearly identical, but not exactly the same
-    # For these instances, we must keep only the first occurrence of each row
+def cached_find_peptide_indexes(protein_sequence, stripped_sequence):
+    return find_peptide_indexes(protein_sequence, stripped_sequence)
 
-    # Sort by 'Stripped.Sequence' and 'Light/Heavy.Log2Ratio' to ensure duplicates are ordered
-    df.sort_values(by=['Stripped.Sequence', 'Light/Heavy.Log2Ratio'], inplace=True)
+# Cache the site index lookup function
 
-    # Use 'duplicated' to mark rows that have an identical sequence and a very close ratio as duplicates
-    df['is_duplicate'] = df.duplicated(subset=['Stripped.Sequence'], keep='first') & \
-                         (df.groupby('Stripped.Sequence')['Light/Heavy.Log2Ratio'].diff().abs().fillna(
-                             0) < merge_tolerance)
+def cached_find_site_indexes(stripped_sequence, site):
+    return find_peptide_indexes(stripped_sequence, site)
 
-    # Keep rows where 'is_duplicate' is False and Light/Heavy.Ratio is not 0 or inf
-    df = df[(~df['is_duplicate'])].drop(columns='is_duplicate')
-
-if len(filter_peptides) > 0:
-    df = df[df['Stripped.Sequence'].isin(filter_peptides)]
 
 if fasta_file is not None:
 
@@ -179,7 +214,7 @@ if fasta_file is not None:
             if stripped_sequence not in protein_sequence:
                 st.warning(f"Sequence {stripped_sequence} not found in protein {protein_name}")
 
-            peptide_indexes = find_peptide_indexes(protein_sequence, stripped_sequence)
+            peptide_indexes = cached_find_peptide_indexes(protein_sequence, stripped_sequence)
             indexes_by_protein.append([i + 1 for i in peptide_indexes])
 
             site_indexes_by_peptide = []
@@ -188,7 +223,7 @@ if fasta_file is not None:
                 if 'K' not in stripped_sequence:
                     st.warning(f"Sequence {stripped_sequence} does not contain any lysine's")
 
-                site_indexes = find_peptide_indexes(stripped_sequence, 'K')
+                site_indexes = cached_find_site_indexes(stripped_sequence, 'K')
 
                 for site_index in site_indexes:
                     site_indexes_by_peptide.append(peptide_index + site_index + 1)
@@ -212,21 +247,25 @@ if fasta_file is not None:
     df['Peptide.Index.Strings'] = peptide_strings
     df['Protein.Site.Strings'] = protein_strings
 
-if should_filter_sites:
-    df = df[df['Protein.Site.Strings'].isin(filter_sites)]
+    if should_filter_sites:
+        df = df[df['Protein.Site.Strings'].isin(filter_sites)]
 
 st.subheader("Filtered Data")
 st.metric(label="Number of peptides", value=df.shape[0])
 st.dataframe(df)
 
+
+df.to_csv('filtered_data.csv')
+
 # Group by 'Stripped.Sequence' and calculate the required statistics
-stats_df = df.groupby(['Stripped.Sequence', 'Protein.Ids', 'Protein.Group', 'Protein.Names', 'Genes'])[
+stats_df = df.groupby(['Run', 'Stripped.Sequence', 'Protein.Ids', 'Protein.Group', 'Protein.Names', 'Genes'])[
     'Light/Heavy.Log2Ratio'].agg(
     ['mean', 'std', 'count', 'sem', 'median', 'min', 'max'])
 stats_df.reset_index(inplace=True)
 
 # Rename the columns for clarity
 stats_df.columns = [
+    'Run',
     'Stripped.Sequence',
     'Protein.Ids',
     'Protein.Group',
@@ -245,10 +284,11 @@ st.subheader("Peptide level Statistics")
 stats_df['Accessibility'] = 100 * 2 ** stats_df['Log2Ratio.Mean'] / (2 ** stats_df['Log2Ratio.Mean'] + 1)
 
 st.dataframe(stats_df)
+stats_df.to_csv('peptide_level_statistics.csv')
 
 # Create the scatter plot with mean on the x-axis and standard deviation on the y-axis
 fig = px.scatter(stats_df, x='Log2Ratio.Mean', y='Log2Ratio.SEM', hover_name='Stripped.Sequence',
-                 hover_data=['Protein.Names', 'Log2Ratio.Count', 'Log2Ratio.SEM', 'Log2Ratio.Median',
+                 hover_data=['Run', 'Protein.Names', 'Log2Ratio.Count', 'Log2Ratio.SEM', 'Log2Ratio.Median',
                              'Log2Ratio.Min', 'Log2Ratio.Max'])
 
 # Enhance the plot with titles and labels
@@ -303,7 +343,7 @@ if fasta_file is not None:
         str)
 
     protein_site_df['Accessibility'] = 100 * 2 ** protein_site_df['Log2Ratio.Mean'] / (
-                2 ** protein_site_df['Log2Ratio.Mean'] + 1)
+            2 ** protein_site_df['Log2Ratio.Mean'] + 1)
 
     st.subheader("Site level Statistics")
     st.dataframe(protein_site_df)
@@ -324,11 +364,11 @@ if fasta_file is not None:
 
     st.plotly_chart(fig)
 
-
     df_quant = pd.DataFrame()
     df_quant['MS2.Scan'] = df['MS2.Scan']
     df_quant['Modified.Sequence'] = df['Modified.Sequence']
     df_quant['Light/Heavy.Ratio'] = df['Light/Heavy.Ratio']
     df_quant['Channel.Zscore.Value'] = abs(norm.ppf(df['Channel.Q.Value']))
     st.dataframe(df_quant)
+
 
