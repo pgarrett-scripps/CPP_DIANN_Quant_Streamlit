@@ -54,10 +54,6 @@ with st.sidebar:
     results_file = st.file_uploader("Upload results file", type=[".tsv", ".zip", ".parquet"],
                                     accept_multiple_files=True)
     fasta_file = st.file_uploader("Upload fasta file", type=[".fasta"])
-    channel_q_value_filter = st.number_input("Channel Q-value filter", value=0.10, min_value=0.0, max_value=1.0,
-                                             step=0.01,
-                                             help='Channel.Q.Value reflects the confidence that the precursor is indeed'
-                                                  ' present in the respective channel')
 
     remove_zeros = st.checkbox("Remove missing values", value=True,
                                help='Remove data which have either a missing L or H channel value')
@@ -75,7 +71,7 @@ with st.sidebar:
                                    help='Minimum Evidence')
     min_channel_evidence = st.number_input("Min Channel Evidence", value=0.0, min_value=0.0, max_value=1.0,
                                            help='Minimum Channel Evidence')
-    max_channel_q_value = st.number_input("Max Channel Q-value", value=0.05, min_value=0.0, max_value=1.0,
+    max_channel_q_value = st.number_input("Max Channel Q-value", value=0.10, min_value=0.0, max_value=1.0,
                                           help='Maximum Channel Q-value')
 
     filter_unique_sites = st.checkbox("Filter for unique sites", value=False, help='Filter for unique sites')
@@ -354,6 +350,10 @@ site_stats_df['Accessibility.Min'] = 100 * 2 ** site_stats_df['Log2Ratio.Min'] /
         2 ** site_stats_df['Log2Ratio.Min'] + 1)
 site_stats_df['Accessibility.Max'] = 100 * 2 ** site_stats_df['Log2Ratio.Max'] / (
         2 ** site_stats_df['Log2Ratio.Max'] + 1)
+
+# drop missing Protein.Site.Strings
+site_stats_df = site_stats_df[~site_stats_df['Protein.Site.Strings'].isin([None, np.nan, ""])]
+
 
 st.subheader("Filtered Data")
 st.metric(label="Number of peptides", value=ratio_df.shape[0])
