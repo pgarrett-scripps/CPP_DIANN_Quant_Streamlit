@@ -1,0 +1,38 @@
+{
+  "name": "Python Streamlit Development",
+  "image": "mcr.microsoft.com/devcontainers/python:3.12",
+  "features": {
+    "ghcr.io/devcontainers/features/python:1": {
+      "installTools": true,
+      "version": "3.12"
+    },
+    "ghcr.io/devcontainers/features/git:1": {},
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.black-formatter",
+      ],
+      "settings": {
+        "python.formatting.provider": "black",
+        "editor.formatOnSave": true,
+        "editor.codeActionsOnSave": {
+          "source.organizeImports": true
+        }
+      }
+    }
+  },
+  "postCreateCommand": "pip install --user -r requirements.txt || pip install --user streamlit pandas numpy matplotlib",
+  "forwardPorts": [
+    8501
+  ],
+  "portsAttributes": {
+    "8501": {
+      "label": "Streamlit",
+      "onAutoForward": "notify"
+    }
+  },
+  "remoteUser": "vscode"
+}
