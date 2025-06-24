@@ -4,8 +4,9 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
+
 from fastaframes import to_df
-from peptacular.protein import find_peptide_indexes
+import peptacular as pt
 from scipy.stats import norm
 
 
@@ -183,7 +184,7 @@ if fasta_file is not None:
             if stripped_sequence not in protein_sequence:
                 st.warning(f"Sequence {stripped_sequence} not found in protein {protein_name}")
 
-            peptide_indexes = find_peptide_indexes(protein_sequence, stripped_sequence)
+            peptide_indexes = pt.find_subsequence_indices(protein_sequence, stripped_sequence, True)
             indexes_by_protein.append([i + 1 for i in peptide_indexes])
 
             site_indexes_by_peptide = []
@@ -192,7 +193,7 @@ if fasta_file is not None:
                 if 'K' not in stripped_sequence:
                     st.warning(f"Sequence {stripped_sequence} does not contain any lysine's")
 
-                site_indexes = find_peptide_indexes(stripped_sequence, 'K')
+                site_indexes = pt.find_subsequence_indices(stripped_sequence, 'K', True)
 
                 for site_index in site_indexes:
                     site_indexes_by_peptide.append(peptide_index + site_index + 1)

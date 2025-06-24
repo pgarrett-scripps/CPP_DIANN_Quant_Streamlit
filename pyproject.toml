@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cpp-diann"
+version = "0.1.0"
+description = "CPP DIANN Streamlit App"
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [
+    {name = "Patrick Garrett", email = "pgarrett@scripps.edu"}
+]
+dependencies = [
+"streamlit~=1.46",
+"pandas~=2.1.2",
+"plotly~=5.18.0",
+"numpy~=1.26.1",
+"requests~=2.31.0",
+"fastaframes~=1.1.0",
+"peptacular~=2.5.0",
+"scipy~=1.11.4",
+]
+
+[project.scripts]
+cpp-diann = "cpp_diann.run:run_app"
+
+[tool.setuptools]
+packages = ["cpp_diann"]
+package-dir = {"" = "src"}
