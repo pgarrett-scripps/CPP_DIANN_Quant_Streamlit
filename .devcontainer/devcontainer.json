@@ -24,7 +24,7 @@
       }
     }
   },
-  "postCreateCommand": "pip install --user -r requirements.txt || pip install --user streamlit pandas numpy matplotlib",
+  "postCreateCommand": "pip install --user -r requirements.txt",
   "forwardPorts": [
     8501
   ],
