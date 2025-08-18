@@ -3,6 +3,6 @@ pandas~=2.2.3
 plotly~=6.0.1
 numpy~=2.2.5
 requests~=2.32.3
-fastaframes~=1.1.0
+fastaframes~=1.2.2
 peptacular~=2.2.1
 scipy~=1.15.2
